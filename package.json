@@ -1,0 +1,29 @@
+{
+  "name": "activity-tracker-system",
+  "version": "1.0.0",
+  "description": "On-chain activity tracking with role derivation",
+  "main": "src/index.js",
+  "scripts": {
+    "compile": "hardhat compile",
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "deploy": "hardhat run scripts/deploy.js --network polygonAmoy",
+    "test": "node scripts/test-flow.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "dotenv": "^17.2.3",
+    "ethers": "^6.10.0",
+    "express": "^5.2.1"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-chai-matchers": "^2.1.0",
+    "@nomicfoundation/hardhat-toolbox": "^6.1.0",
+    "chai": "^4.5.0",
+    "hardhat": "^2.26.0",
+    "nodemon": "^3.1.11"
+  }
+}
