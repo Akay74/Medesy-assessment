@@ -2,7 +2,7 @@ const { ethers } = require('ethers');
 const crypto = require('crypto');
 
 /**
- * WalletService - Manages programmatic wallet creation for users
+ * WalletService - Manages wallet creation for users
  * Identity remains off-chain & wallets are deterministically generated
  */
 class WalletService {
@@ -21,7 +21,7 @@ class WalletService {
             return this.wallets.get(userId);
         }
 
-        // Generate deterministic wallet from userId + secret
+        // Generate wallet from userId + secret
         const seed = this.generateSeed(userId);
         const wallet = new ethers.Wallet(seed);
 
@@ -45,8 +45,7 @@ class WalletService {
     }
 
     /**
-     * Generate deterministic seed (simplified for demo)
-     * In production: Use BIP39 mnemonic + derivation path
+     * Generate seed from userId
      */
     generateSeed(userId) {
         const secret = process.env.WALLET_SECRET || 'demo-secret-change-in-production';
@@ -58,7 +57,7 @@ class WalletService {
     }
 
     /**
-     * Get all wallets (for demo purposes)
+     * Get all wallets
      */
     getAllWallets() {
         return Array.from(this.wallets.values());

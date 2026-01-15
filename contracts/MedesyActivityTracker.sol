@@ -3,7 +3,7 @@ pragma solidity ^0.8.20;
 
 /**
  * @title MedesyActivityTracker
- * @notice Minimal on-chain activity tracking with role derivation
+ * @notice On-chain activity tracking with rank derivation
  * @dev Optimized for gas efficiency with access control
  */
 contract MedesyActivityTracker {
