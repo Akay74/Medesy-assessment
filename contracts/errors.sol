@@ -58,4 +58,7 @@ interface GenericErrors {
 
     /// @notice Thrown when an identity hash is already set for a user.
     error IdentityAlreadySet();
+
+    /// @notice Thrown when user is unauthorized to perform an action.
+    error AccessControlUnauthorized(address account, bytes32 neededRole);
 }
