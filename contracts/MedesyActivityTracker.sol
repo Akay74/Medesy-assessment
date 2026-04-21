@@ -1,208 +1,126 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.17;
+
+import "@openzeppelin/contracts/access/AccessControl.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "./IMedesyActivityTracker.sol";
+import "./structs.sol";
 
 /**
  * @title MedesyActivityTracker
- * @notice On-chain activity tracking with rank derivation
- * @dev Optimized for gas efficiency with access control
+ * @notice Immutable, non-upgradeable contract for healthcare activity tracking and identity anchoring.
+ * @dev Implements IMedesyActivityTracker with AccessControl, batch limits, and gas optimisations.
+ * @custom:security-contact See security policy.
  */
-contract MedesyActivityTracker {
-    
-    // State Variables
-    
-    /// @notice Authorized relayer address that can record activities
-    address public relayer;
-    
-    /// @notice Contract owner for administrative functions
-    address public owner;
-    
-    /// @notice Mapping of user wallet => activity score
-    mapping(address => uint256) public activityScores;
-    
-    /// @notice Mapping of user wallet => total actions count
-    mapping(address => uint256) public actionCount;
-    
-    /// @notice Mapping of user wallet => last activity timestamp
-    mapping(address => uint256) public lastActivity;
-    
-    // Rank Thresholds
-    
-    uint256 public constant BRONZE_THRESHOLD = 0;
-    uint256 public constant SILVER_THRESHOLD = 100;
-    uint256 public constant GOLD_THRESHOLD = 500;
-    uint256 public constant PLATINUM_THRESHOLD = 1000;
-    
-    // Events
-    
-    event ActivityRecorded(
-        address indexed user,
-        uint256 points,
-        uint256 newTotal,
-        uint256 timestamp
-    );
-    
-    event RelayerUpdated(address indexed oldRelayer, address indexed newRelayer);
-    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
-    
-    // Errors
-    
-    error Unauthorized();
-    error InvalidAddress();
-    error InvalidPoints();
-    
-    // Modifiers
-    
-    modifier onlyRelayer() {
-        if (msg.sender != relayer) revert Unauthorized();
-        _;
+contract MedesyActivityTracker is IMedesyActivityTracker, AccessControl, ReentrancyGuard {
+    using SharedStructs for *;
+
+    /// @notice Maximum batch size hard cap (Polytrade standard: 30 items).
+    uint256 public constant MAX_BATCH_SIZE_LIMIT = 30;
+
+    /// @notice Role allowed to update system parameters (e.g., max batch size).
+    bytes32 public constant ADMIN_ROLE = DEFAULT_ADMIN_ROLE;
+
+    /// @dev Mapping from user address to an array of anchored activities.
+    mapping(address => SharedStructs.Activity[]) private _activities;
+
+    /// @dev Mapping from user address to identity anchor record.
+    mapping(address => SharedStructs.IdentityAnchor) private _identityAnchors;
+
+    /// @dev Current maximum batch size (can be reduced by admin, but never exceeds MAX_BATCH_SIZE_LIMIT).
+    uint256 private _maxBatchSize;
+
+    /// @notice Initialises the contract, sets up roles and default batch size.
+    /// @param initialAdmin Address that will receive DEFAULT_ADMIN_ROLE.
+    constructor(address initialAdmin) {
+        if (initialAdmin == address(0)) revert InvalidAddress();
+        _grantRole(ADMIN_ROLE, initialAdmin);
+        _maxBatchSize = MAX_BATCH_SIZE_LIMIT;
     }
-    
-    modifier onlyOwner() {
-        if (msg.sender != owner) revert Unauthorized();
-        _;
+
+    // ----------------------------- Core Functions -----------------------------
+
+    /// @inheritdoc IMedesyActivityTracker
+    function anchorActivity(bytes32 activityHash) external nonReentrant {
+        _anchorActivity(msg.sender, activityHash);
     }
-    
-    // Constructor
-    
-    constructor(address _relayer) {
-        if (_relayer == address(0)) revert InvalidAddress();
-        
-        owner = msg.sender;
-        relayer = _relayer;
-        
-        emit RelayerUpdated(address(0), _relayer);
-    }
-    
-    // Core Functions
-    
-    /**
-     * @notice Record activity for a user (callable only by relayer)
-     * @param user The user's wallet address
-     * @param points Points to award for this activity
-     * @dev Gas optimized: single SSTORE for score, packed storage reads
-     */
-    function recordActivity(address user, uint256 points) external onlyRelayer {
-        if (user == address(0)) revert InvalidAddress();
-        if (points == 0) revert InvalidPoints();
-        
-        // Update state
-        uint256 newScore = activityScores[user] + points;
-        activityScores[user] = newScore;
-        actionCount[user]++;
-        lastActivity[user] = block.timestamp;
-        
-        emit ActivityRecorded(user, points, newScore, block.timestamp);
-    }
-    
-    // View Functions - Rank Derivation
-    
-    /**
-     * @notice Get user's rank based on activity score
-     * @param user The user's wallet address
-     * @return rank The rank as a string
-     * @dev Pure on-chain derivation, no off-chain dependencies
-     */
-    function getRank(address user) external view returns (string memory rank) {
-        uint256 score = activityScores[user];
-        
-        if (score >= PLATINUM_THRESHOLD) {
-            return "Platinum";
-        } else if (score >= GOLD_THRESHOLD) {
-            return "Gold";
-        } else if (score >= SILVER_THRESHOLD) {
-            return "Silver";
-        } else {
-            return "Bronze";
+
+    /// @inheritdoc IMedesyActivityTracker
+    function anchorActivityBatch(bytes32[] calldata activityHashes) external nonReentrant {
+        uint256 length = activityHashes.length;
+        if (length == 0) revert InvalidFraction();
+        if (length > _maxBatchSize) revert BatchLimitExceeded();
+
+        for (uint256 i = 0; i < length; i++) {
+            if (activityHashes[i] == bytes32(0)) revert InvalidActivityHash();
+            _activities[msg.sender].push(SharedStructs.Activity(block.timestamp, activityHashes[i]));
         }
+
+        emit BatchActivityAnchored(msg.sender, activityHashes, block.timestamp);
     }
-    
-    /**
-     * @notice Get user's rank as uint (gas efficient for off-chain processing)
-     * @param user The user's wallet address
-     * @return rankLevel 0=Bronze, 1=Silver, 2=Gold, 3=Platinum
-     */
-    function getRankLevel(address user) external view returns (uint8 rankLevel) {
-        uint256 score = activityScores[user];
-        
-        if (score >= PLATINUM_THRESHOLD) return 3;
-        if (score >= GOLD_THRESHOLD) return 2;
-        if (score >= SILVER_THRESHOLD) return 1;
-        return 0;
+
+    /// @inheritdoc IMedesyActivityTracker
+    function anchorIdentity(bytes32 identityHash) external nonReentrant {
+        if (identityHash == bytes32(0)) revert InvalidActivityHash();
+        SharedStructs.IdentityAnchor storage anchor = _identityAnchors[msg.sender];
+        if (anchor.isSet) revert IdentityAlreadySet();
+
+        anchor.identityHash = identityHash;
+        anchor.timestamp = block.timestamp;
+        anchor.isSet = true;
+
+        emit IdentityAnchored(msg.sender, identityHash, block.timestamp);
     }
-    
-    /**
-     * @notice Get complete user profile
-     * @param user The user's wallet address
-     * @return score Total activity score
-     * @return actions Total number of actions
-     * @return lastActive Timestamp of last activity
-     * @return rank Current rank string
-     */
-    function getUserProfile(address user) 
-        external 
-        view 
-        returns (
-            uint256 score,
-            uint256 actions,
-            uint256 lastActive,
-            string memory rank
-        ) 
-    {
-        score = activityScores[user];
-        actions = actionCount[user];
-        lastActive = lastActivity[user];
-        
-        if (score >= PLATINUM_THRESHOLD) {
-            rank = "Platinum";
-        } else if (score >= GOLD_THRESHOLD) {
-            rank = "Gold";
-        } else if (score >= SILVER_THRESHOLD) {
-            rank = "Silver";
-        } else {
-            rank = "Bronze";
+
+    // ----------------------------- View Functions -----------------------------
+
+    /// @inheritdoc IMedesyActivityTracker
+    function getActivityCount(address user) external view returns (uint256) {
+        return _activities[user].length;
+    }
+
+    /// @inheritdoc IMedesyActivityTracker
+    function getActivities(address user, uint256 startIndex, uint256 endIndex) external view returns (SharedStructs.Activity[] memory) {
+        uint256 count = _activities[user].length;
+        if (startIndex >= count || endIndex > count || startIndex >= endIndex) {
+            return new SharedStructs.Activity[](0);
         }
+        uint256 resultLength = endIndex - startIndex;
+        SharedStructs.Activity[] memory result = new SharedStructs.Activity[](resultLength);
+        for (uint256 i = 0; i < resultLength; i++) {
+            result[i] = _activities[user][startIndex + i];
+        }
+        return result;
     }
-    
-    /**
-     * @notice Check if user qualifies for a specific rank
-     * @param user The user's wallet address
-     * @param requiredRank 0=Bronze, 1=Silver, 2=Gold, 3=Platinum
-     * @return qualified True if user meets or exceeds the rank
-     */
-    function hasRank(address user, uint8 requiredRank) external view returns (bool qualified) {
-        uint256 score = activityScores[user];
-        
-        if (requiredRank == 3) return score >= PLATINUM_THRESHOLD;
-        if (requiredRank == 2) return score >= GOLD_THRESHOLD;
-        if (requiredRank == 1) return score >= SILVER_THRESHOLD;
-        return true; // Everyone has Bronze
+
+    /// @inheritdoc IMedesyActivityTracker
+    function getIdentityAnchor(address user) external view returns (SharedStructs.IdentityAnchor memory) {
+        return _identityAnchors[user];
     }
-    
-    // Admin Functions
-    
-    /**
-     * @notice Update the relayer address
-     * @param newRelayer New relayer address
-     */
-    function updateRelayer(address newRelayer) external onlyOwner {
-        if (newRelayer == address(0)) revert InvalidAddress();
-        
-        address oldRelayer = relayer;
-        relayer = newRelayer;
-        
-        emit RelayerUpdated(oldRelayer, newRelayer);
+
+    /// @inheritdoc IMedesyActivityTracker
+    function getMaxBatchSize() external view returns (uint256) {
+        return _maxBatchSize;
     }
-    
-    /**
-     * @notice Transfer contract ownership
-     * @param newOwner New owner address
-     */
-    function transferOwnership(address newOwner) external onlyOwner {
-        if (newOwner == address(0)) revert InvalidAddress();
-        
-        address oldOwner = owner;
-        owner = newOwner;
-        
-        emit OwnershipTransferred(oldOwner, newOwner);
+
+    // ----------------------------- Admin Functions -----------------------------
+
+    /// @inheritdoc IMedesyActivityTracker
+    function setMaxBatchSize(uint256 newSize) external onlyRole(ADMIN_ROLE) {
+        if (newSize == 0 || newSize > MAX_BATCH_SIZE_LIMIT) revert InvalidFraction();
+        uint256 oldSize = _maxBatchSize;
+        _maxBatchSize = newSize;
+        emit MaxBatchSizeUpdated(oldSize, newSize);
+    }
+
+    // ----------------------------- Internal Helpers -----------------------------
+
+    /// @dev Internal function to anchor a single activity.
+    /// @param user Address of the user anchoring the activity.
+    /// @param activityHash Non-zero hash of the activity.
+    function _anchorActivity(address user, bytes32 activityHash) internal {
+        if (activityHash == bytes32(0)) revert InvalidActivityHash();
+        _activities[user].push(SharedStructs.Activity(block.timestamp, activityHash));
+        emit ActivityAnchored(user, activityHash, block.timestamp);
     }
 }
