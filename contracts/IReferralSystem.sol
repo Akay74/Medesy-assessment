@@ -30,6 +30,11 @@ interface IReferralSystem is GenericErrors {
     /// @param token Address of the ERC20 reward token.
     event RewardTokenSet(address indexed token);
 
+    /// @notice Emitted when the maximum batch size is changed by admin.
+    /// @param oldSize Previous max batch size.
+    /// @param newSize New max batch size.
+    event MaxBatchSizeUpdated(uint256 oldSize, uint256 newSize);
+
     // Core Functions
 
     /// @notice Registers a single user with a referrer. Can only be called once per user.
