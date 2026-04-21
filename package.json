@@ -22,6 +22,7 @@
   "devDependencies": {
     "@nomicfoundation/hardhat-chai-matchers": "^2.1.0",
     "@nomicfoundation/hardhat-toolbox": "^6.1.0",
+    "@openzeppelin/contracts": "^5.6.1",
     "chai": "^4.5.0",
     "hardhat": "^2.26.0",
     "nodemon": "^3.1.11"
